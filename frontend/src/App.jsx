@@ -1,15 +1,35 @@
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
+
+const API_URL = 'http://localhost:8000'
 
 function App() {
   const [image, setImage] = useState(null)
   const [preview, setPreview] = useState(null)
   const [imageMessage, setImageMessage] = useState('')
-  const [vin, setVin] = useState('')
-  const [vout, setVout] = useState('')
-  const [current, setCurrent] = useState('')
-  const [result, setResult] = useState(null)
+  const [readings, setReadings] = useState(null)
+  const [connection, setConnection] = useState('Connecting...')
+  const [testMessage, setTestMessage] = useState('')
+
+  async function fetchReadings() {
+    try {
+      const response = await fetch(`${API_URL}/api/readings`)
+      if (!response.ok) throw new Error('API unavailable')
+
+      const data = await response.json()
+      setReadings(data)
+      setConnection(data.connected ? 'Connected' : 'Waiting for ESP32')
+    } catch {
+      setConnection('Backend offline')
+    }
+  }
+
+  useEffect(() => {
+    fetchReadings()
+    const timer = setInterval(fetchReadings, 2000)
+    return () => clearInterval(timer)
+  }, [])
 
   function handleImageUpload(event) {
     const file = event.target.files?.[0]
@@ -29,24 +49,28 @@ function App() {
     }
 
     setImageMessage(
-      'Image uploaded. YOLO detection will be available after model integration.'
+      'Image uploaded. YOLO detection will be enabled after model integration.'
     )
   }
 
-  function startTest() {
-    if (vin === '' || vout === '' || current === '') {
-      setResult({
-        status: 'INCOMPLETE',
-        message: 'Enter all three electrical readings.',
-      })
+  async function startTest() {
+    await fetchReadings()
+
+    if (!readings?.connected) {
+      setTestMessage('Waiting for electrical readings from the ESP32.')
       return
     }
 
-    setResult({
-      status: 'READY',
-      message: 'Readings captured. ML prediction will be available after model integration.',
-    })
+    setTestMessage(
+      'Readings received. Random Forest prediction will be enabled after model integration.'
+    )
   }
+
+  const hasReadings =
+    readings?.connected &&
+    readings.vin !== null &&
+    readings.vout !== null &&
+    readings.current !== null
 
   return (
     <main className="dashboard">
@@ -56,15 +80,15 @@ function App() {
           <h1>PCB Fault Detection</h1>
           <p>LM2596S Buck Converter Testing System</p>
         </div>
-        <span className="connection">Software Preview</span>
+        <span className="connection">{connection}</span>
       </header>
 
       <section className="welcome">
         <p className="eyebrow">PCB DIAGNOSTICS</p>
         <h2>Test your PCB with confidence.</h2>
         <p>
-          Inspect visible damage using images or test electrical
-          readings using the independent ML module.
+          Inspect visible damage or test electrical readings
+          using the independent modules.
         </p>
       </section>
 
@@ -80,12 +104,16 @@ function App() {
 
           <label className="upload-area">
             {preview ? (
-              <img className="pcb-preview" src={preview} alt="Uploaded PCB" />
+              <img
+                className="pcb-preview"
+                src={preview}
+                alt="Uploaded PCB"
+              />
             ) : (
               <>
                 <span className="upload-icon">↑</span>
                 <strong>Upload PCB Image</strong>
-                <span>Choose a JPG, PNG or other image file</span>
+                <span>Choose an image file</span>
               </>
             )}
             <input
@@ -99,12 +127,10 @@ function App() {
             Process Image
           </button>
 
-          {imageMessage && (
-            <p className="message">{imageMessage}</p>
-          )}
+          {imageMessage && <p className="message">{imageMessage}</p>}
 
           <p className="hint">
-            Detected locations will appear here after YOLO is integrated.
+            YOLO detection will be connected separately.
           </p>
         </section>
 
@@ -113,58 +139,46 @@ function App() {
             <span className="number">02</span>
             <div>
               <h2>Electrical Testing</h2>
-              <p>Random Forest ML</p>
+              <p>ESP32 + INA219 + ADS1115</p>
             </div>
           </div>
 
-          <p className="section-description">
-            Enter readings from your LM2596S test PCB.
-          </p>
+          <div className="reading-card">
+            <span>Input Voltage</span>
+            <strong>
+              {readings?.vin != null
+                ? `${Number(readings.vin).toFixed(2)} V`
+                : '-- V'}
+            </strong>
+          </div>
 
-          <label className="field">
-            Input Voltage <span>(V)</span>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="e.g. 12.0"
-              value={vin}
-              onChange={(e) => setVin(e.target.value)}
-            />
-          </label>
+          <div className="reading-card">
+            <span>Output Voltage</span>
+            <strong>
+              {readings?.vout != null
+                ? `${Number(readings.vout).toFixed(2)} V`
+                : '-- V'}
+            </strong>
+          </div>
 
-          <label className="field">
-            Output Voltage <span>(V)</span>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="e.g. 5.0"
-              value={vout}
-              onChange={(e) => setVout(e.target.value)}
-            />
-          </label>
-
-          <label className="field">
-            Output Current <span>(A)</span>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="e.g. 0.5"
-              value={current}
-              onChange={(e) => setCurrent(e.target.value)}
-            />
-          </label>
+          <div className="reading-card">
+            <span>Output Current</span>
+            <strong>
+              {readings?.current != null
+                ? `${Number(readings.current).toFixed(3)} A`
+                : '-- A'}
+            </strong>
+          </div>
 
           <button className="primary-button" onClick={startTest}>
             Start Test
           </button>
 
           <p className="hint">
-            ML prediction will activate after the backend and trained model
-            are connected. Manual readings do not represent live sensors.
+            Readings refresh automatically every 2 seconds.
           </p>
+
+          {testMessage && <p className="message">{testMessage}</p>}
         </section>
       </div>
 
@@ -172,17 +186,17 @@ function App() {
         <div>
           <p className="eyebrow">TEST SUMMARY</p>
           <h2>Test Result</h2>
-          <p>
-            Image analysis and electrical testing operate independently.
-          </p>
+          <p>Electrical testing and image processing are independent.</p>
         </div>
 
         <div className="result-status">
           <span className="status-dot" />
-          <strong>
-            {result?.status ?? 'WAITING'}
-          </strong>
-          {result && <p>{result.message}</p>}
+          <strong>{hasReadings ? 'READINGS AVAILABLE' : 'WAITING'}</strong>
+          <p>
+            {hasReadings
+              ? 'Electrical readings received. ML prediction is not connected yet.'
+              : 'Waiting for valid electrical readings.'}
+          </p>
         </div>
       </section>
 
