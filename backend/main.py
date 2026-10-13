@@ -48,4 +48,13 @@ def receive_readings(data: SensorReadings):
 
 @app.get("/api/readings")
 def get_readings():
-    return latest_readings
+    data = latest_readings.copy()
+
+    if data["updated_at"] is None:
+        data["connected"] = False
+    else:
+        updated = datetime.fromisoformat(data["updated_at"])
+        age = (datetime.now(timezone.utc) - updated).total_seconds()
+        data["connected"] = age <= 5
+
+    return data
