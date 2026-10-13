@@ -42,16 +42,41 @@ function App() {
     setImageMessage('')
   }
 
-  function processImage() {
-    if (!image) {
-      setImageMessage('Please upload a PCB image first.')
-      return
+  
+async function processImage() {
+  if (!image) {
+    setImageMessage('Please upload a PCB image first.')
+    return
+  }
+
+  setImageMessage('Uploading image...')
+
+  try {
+    const formData = new FormData()
+    formData.append('file', image)
+
+    const response = await fetch(
+      `${API_URL}/api/process-image`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    )
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Image processing failed.')
     }
 
+    setImageMessage(data.message)
+  } catch (error) {
     setImageMessage(
-      'Image uploaded. YOLO detection will be enabled after model integration.'
+      error.message || 'Could not connect to the backend.'
     )
   }
+}
+
 
   async function startTest() {
     await fetchReadings()
