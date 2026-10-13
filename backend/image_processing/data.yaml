@@ -1,0 +1,12 @@
+path: ./dataset
+train: images/train
+val: images/val
+
+names:
+  0: burnt_capacitor
+  1: missing_capacitor
+  2: broken_component
+  3: broken_track
+  4: darker_area
+  5: hole_in_track
+  6: broken_wire
