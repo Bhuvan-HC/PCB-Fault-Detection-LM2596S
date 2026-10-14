@@ -1,0 +1,15 @@
+path: C:/BHARATH/MGB/project_web/PCB-Fault-Detection-LM2596S/backend/image_processing/dataset_components
+train: images/train
+val: images/val
+
+nc: 9
+names:
+  0: Cap1
+  1: Cap2
+  2: Cap3
+  3: Cap4
+  4: MOSFET
+  5: Mov
+  6: Resestor
+  7: Resistor
+  8: Transformer
