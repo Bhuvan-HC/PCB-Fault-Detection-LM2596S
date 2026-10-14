@@ -1,0 +1,11 @@
+filename,side,label,fault_type
+front_01_burnt_capacitor.jpg,front,faulty,burnt_capacitor
+front_02_missing_capacitor.jpg,front,faulty,missing_capacitor
+front_03_broken_component.jpg,front,faulty,broken_component
+front_04_broken_track.jpg,front,faulty,broken_track
+front_05_darker_area.jpg,front,faulty,darker_area
+back_01_hole_in_track.jpg,back,faulty,hole_in_track
+back_02_broken_track.jpg,back,faulty,broken_track
+back_03_broken_wire.jpg,back,faulty,broken_wire
+back_04_darker_area.jpg,back,faulty,darker_area
+back_05_broken_component.jpg,back,faulty,broken_component

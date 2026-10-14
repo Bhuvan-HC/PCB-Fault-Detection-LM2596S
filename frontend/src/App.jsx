@@ -1,289 +1,334 @@
-import { useEffect, useState } from 'react'
-import './App.css'
+import { useRef, useState } from "react";
+import "./App.css";
 
-const API_URL = 'http://localhost:8000'
+const API_URL = "http://127.0.0.1:8000";
 
-function App() {
-  const [image, setImage] = useState(null)
-  const [preview, setPreview] = useState(null)
-  const [imageMessage, setImageMessage] = useState('')
-  const [readings, setReadings] = useState(null)
-  const [connection, setConnection] = useState('Connecting...')
-  const [testMessage, setTestMessage] = useState('')
+export default function App() {
+  const fileInputRef = useRef(null);
 
-  // Fetch the latest electrical readings from FastAPI
-  async function fetchReadings() {
-    try {
-      const response = await fetch(`${API_URL}/api/readings`)
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState("");
+  const [resultImage, setResultImage] = useState("");
+  const [detections, setDetections] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-      if (!response.ok) {
-        throw new Error('API unavailable')
-      }
+  const [readings, setReadings] = useState({
+    vin: null,
+    vout: null,
+    current: null,
+    connected: false,
+  });
 
-      const data = await response.json()
+  function handleFileChange(event) {
+    const selectedFile = event.target.files?.[0];
 
-      setReadings(data)
-      setConnection(
-        data.connected ? 'Connected' : 'Waiting for ESP32'
-      )
+    if (!selectedFile) return;
 
-      return data
-    } catch {
-      setConnection('Backend offline')
-      return null
+    if (!selectedFile.type.startsWith("image/")) {
+      setError("Please select an image file.");
+      return;
     }
+
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      setError("Image size must be less than 10 MB.");
+      return;
+    }
+
+    setFile(selectedFile);
+    setPreview(URL.createObjectURL(selectedFile));
+
+    setResultImage("");
+    setDetections([]);
+    setError("");
+    setMessage("");
   }
 
-  // Refresh readings every 2 seconds
-  useEffect(() => {
-    fetchReadings()
-
-    const timer = setInterval(fetchReadings, 2000)
-
-    return () => clearInterval(timer)
-  }, [])
-
-  // Handle PCB image selection
-  function handleImageUpload(event) {
-    const file = event.target.files?.[0]
-
-    if (!file) return
-
-    if (preview) {
-      URL.revokeObjectURL(preview)
+  async function detectFaults() {
+    if (!file) {
+      setError("Please upload a PCB image first.");
+      return;
     }
 
-    setImage(file)
-    setPreview(URL.createObjectURL(file))
-    setImageMessage('')
-  }
-
-  // Upload PCB image to the backend
-  async function processImage() {
-    if (!image) {
-      setImageMessage('Please upload a PCB image first.')
-      return
-    }
-
-    setImageMessage('Uploading image...')
+    setLoading(true);
+    setError("");
+    setMessage("");
+    setResultImage("");
+    setDetections([]);
 
     try {
-      const formData = new FormData()
-      formData.append('file', image)
+      const formData = new FormData();
+
+      formData.append("file", file);
 
       const response = await fetch(
         `${API_URL}/api/process-image`,
         {
-          method: 'POST',
+          method: "POST",
           body: formData,
         }
-      )
+      );
 
-      const data = await response.json()
+      const data = await response.json();
 
       if (!response.ok) {
         throw new Error(
-          data.detail || 'Image processing failed.'
-        )
+          data.detail || data.message || "Detection failed."
+        );
       }
 
-      setImageMessage(
-        data.message || 'Image uploaded successfully.'
-      )
-    } catch (error) {
-      setImageMessage(
-        error.message || 'Could not connect to the backend.'
-      )
+      if (!data.success) {
+        throw new Error(data.message || "Detection failed.");
+      }
+
+      setResultImage(data.image || "");
+      setDetections(data.detections || []);
+      setMessage(
+        data.detected
+          ? `Detection completed: ${data.detections.length} object(s) found.`
+          : "Detection completed. No objects detected."
+      );
+    } catch (err) {
+      setError(
+        err.message ||
+        "Cannot connect to the backend. Check whether FastAPI is running."
+      );
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Start electrical testing
-  async function startTest() {
-    setTestMessage('Checking electrical readings...')
+  async function fetchReadings() {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/readings`
+      );
 
-    const latestReadings = await fetchReadings()
+      if (!response.ok) {
+        throw new Error("Could not fetch sensor readings.");
+      }
 
-    if (
-      !latestReadings?.connected ||
-      latestReadings.vin == null ||
-      latestReadings.vout == null ||
-      latestReadings.current == null
-    ) {
-      setTestMessage(
-        'Waiting for valid electrical readings from the ESP32.'
-      )
-      return
+      const data = await response.json();
+
+      setReadings(data);
+    } catch {
+      setReadings((previous) => ({
+        ...previous,
+        connected: false,
+      }));
     }
-
-    setTestMessage(
-      'Readings received. Random Forest prediction will be enabled after model integration.'
-    )
   }
-
-  const hasReadings =
-    readings?.connected &&
-    readings.vin != null &&
-    readings.vout != null &&
-    readings.current != null
 
   return (
     <main className="dashboard">
       <header className="header">
-        <div className="logo">PCB</div>
-
         <div>
+          <p className="eyebrow">AI-POWERED INSPECTION</p>
           <h1>PCB Fault Detection</h1>
-          <p>LM2596S Buck Converter Testing System</p>
+          <p className="subtitle">
+            Upload a PCB image to inspect visible faults.
+          </p>
         </div>
 
-        <span className="connection">{connection}</span>
+        <span className="status-badge">
+          YOLO Vision
+        </span>
       </header>
 
-      <section className="welcome">
-        <p className="eyebrow">PCB DIAGNOSTICS</p>
-        <h2>Test your PCB with confidence.</h2>
-        <p>
-          Inspect visible damage or test electrical readings
-          using the independent modules.
-        </p>
-      </section>
-
-      <div className="modules">
-        {/* Image Processing Module */}
-        <section className="panel">
-          <div className="panel-heading">
-            <span className="number">01</span>
-
-            <div>
-              <h2>Image Processing</h2>
-              <p>YOLO + OpenCV</p>
-            </div>
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>PCB Image Inspection</h2>
+            <p>
+              Upload a JPG, PNG, or WebP image.
+            </p>
           </div>
+        </div>
 
-          <label className="upload-area">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          onChange={handleFileChange}
+          hidden
+        />
+
+        <button
+          className="upload-button"
+          onClick={() => fileInputRef.current?.click()}
+          type="button"
+        >
+          Choose PCB Image
+        </button>
+
+        {file && (
+          <p className="filename">
+            Selected: {file.name}
+          </p>
+        )}
+
+        <div className="image-grid">
+          <div className="image-card">
+            <h3>Original Image</h3>
+
             {preview ? (
               <img
-                className="pcb-preview"
                 src={preview}
-                alt="Uploaded PCB"
+                alt="Original PCB"
+                className="pcb-image"
               />
             ) : (
-              <>
-                <span className="upload-icon">↑</span>
-                <strong>Upload PCB Image</strong>
-                <span>Choose an image file</span>
-              </>
+              <div className="image-placeholder">
+                <span>Upload a PCB image</span>
+              </div>
             )}
+          </div>
 
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={handleImageUpload}
-            />
-          </label>
+          <div className="image-card">
+            <h3>YOLO Detection Result</h3>
 
-          <button
-            className="primary-button"
-            onClick={processImage}
-          >
-            Process Image
-          </button>
+            {resultImage ? (
+              <img
+                src={resultImage}
+                alt="PCB with YOLO detection boxes"
+                className="pcb-image"
+              />
+            ) : (
+              <div className="image-placeholder">
+                <span>
+                  Detection result will appear here
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
 
-          {imageMessage && (
-            <p className="message">{imageMessage}</p>
-          )}
+        <button
+          className="detect-button"
+          onClick={detectFaults}
+          disabled={!file || loading}
+          type="button"
+        >
+          {loading ? "Detecting..." : "Detect Faults"}
+        </button>
 
-          <p className="hint">
-            YOLO detection will be connected separately.
-          </p>
-        </section>
+        {error && (
+          <div className="alert error">
+            {error}
+          </div>
+        )}
 
-        {/* Electrical Testing Module */}
-        <section className="panel">
-          <div className="panel-heading">
-            <span className="number">02</span>
+        {message && (
+          <div className="alert success">
+            {message}
+          </div>
+        )}
 
-            <div>
-              <h2>Electrical Testing</h2>
-              <p>ESP32 + INA219 + ADS1115</p>
+        {detections.length > 0 && (
+          <div className="results">
+            <h3>Detected Objects</h3>
+
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fault</th>
+                    <th>Confidence</th>
+                    <th>Bounding Box</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {detections.map((item, index) => (
+                    <tr key={`${item.class_id}-${index}`}>
+                      <td>{item.class_name}</td>
+
+                      <td>
+                        {(item.confidence * 100).toFixed(1)}%
+                      </td>
+
+                      <td>
+                        {item.box.join(", ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
+        )}
+      </section>
 
-          <div className="reading-card">
-            <span>Input Voltage</span>
-            <strong>
-              {readings?.vin != null
-                ? `${Number(readings.vin).toFixed(2)} V`
-                : '-- V'}
-            </strong>
+      <section className="panel sensor-panel">
+        <div className="section-heading">
+          <div>
+            <h2>Electrical Measurements</h2>
+            <p>
+              This module is independent of image detection.
+            </p>
           </div>
 
-          <div className="reading-card">
-            <span>Output Voltage</span>
-            <strong>
-              {readings?.vout != null
-                ? `${Number(readings.vout).toFixed(2)} V`
-                : '-- V'}
-            </strong>
-          </div>
-
-          <div className="reading-card">
-            <span>Output Current</span>
-            <strong>
-              {readings?.current != null
-                ? `${Number(readings.current).toFixed(3)} A`
-                : '-- A'}
-            </strong>
-          </div>
-
-          <button
-            className="primary-button"
-            onClick={startTest}
+          <span
+            className={
+              readings.connected
+                ? "connection connected"
+                : "connection disconnected"
+            }
           >
-            Start Test
-          </button>
-
-          <p className="hint">
-            Readings refresh automatically every 2 seconds.
-          </p>
-
-          {testMessage && (
-            <p className="message">{testMessage}</p>
-          )}
-        </section>
-      </div>
-
-      {/* Test Summary */}
-      <section className="result-panel">
-        <div>
-          <p className="eyebrow">TEST SUMMARY</p>
-          <h2>Test Result</h2>
-          <p>
-            Electrical testing and image processing are independent.
-          </p>
+            {readings.connected
+              ? "Connected"
+              : "Offline"}
+          </span>
         </div>
 
-        <div className="result-status">
-          <span className="status-dot" />
+        <div className="sensor-grid">
+          <SensorCard
+            label="Input Voltage"
+            value={readings.vin}
+            unit="V"
+          />
 
-          <strong>
-            {hasReadings ? 'READINGS AVAILABLE' : 'WAITING'}
-          </strong>
+          <SensorCard
+            label="Output Voltage"
+            value={readings.vout}
+            unit="V"
+          />
 
-          <p>
-            {hasReadings
-              ? 'Electrical readings received. ML prediction is not connected yet.'
-              : 'Waiting for valid electrical readings.'}
-          </p>
+          <SensorCard
+            label="Current"
+            value={readings.current}
+            unit="A"
+          />
         </div>
+
+        <button
+          className="secondary-button"
+          onClick={fetchReadings}
+          type="button"
+        >
+          Refresh Readings
+        </button>
       </section>
 
       <footer>
-        LM2596S PCB Fault Detection System
-        <span>YOLO + OpenCV · Random Forest</span>
+        PCB Fault Detection System · YOLO + FastAPI
       </footer>
     </main>
-  )
+  );
 }
 
-export default App
+function SensorCard({ label, value, unit }) {
+  return (
+    <div className="sensor-card">
+      <p>{label}</p>
+
+      <strong>
+        {value === null || value === undefined
+          ? "--"
+          : Number(value).toFixed(2)}{" "}
+        <span>{unit}</span>
+      </strong>
+    </div>
+  );
+}
