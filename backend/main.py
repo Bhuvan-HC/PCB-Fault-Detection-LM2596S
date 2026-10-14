@@ -1,37 +1,28 @@
+
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 import base64
+import math
 
 import cv2
 import numpy as np
-
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-
-# --------------------------------------------------
-# APP CONFIGURATION
-# --------------------------------------------------
-
-app = FastAPI(title="LM2596S PCB Fault Detection API")
+app = FastAPI(title="PCB Fault Detection API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_methods=["GET", "POST"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# --------------------------------------------------
-# YOLO MODEL
-# --------------------------------------------------
-
+# ---------------- YOLO MODEL ----------------
 MODEL_PATH = (
     Path(__file__).parent
     / "image_processing"
@@ -45,80 +36,89 @@ if MODEL_PATH.exists():
     model = YOLO(str(MODEL_PATH))
     print(f"YOLO model loaded: {MODEL_PATH}")
 else:
-    print(f"WARNING: YOLO model not found: {MODEL_PATH}")
+    print(f"YOLO weights not found: {MODEL_PATH}")
 
-
-# --------------------------------------------------
-# ELECTRICAL SENSOR API - PRESERVED
-# --------------------------------------------------
-
-class SensorReadings(BaseModel):
-    vin: float
-    vout: float
-    current: float
-
+# ---------------- SENSOR DATA ----------------
+data_lock = Lock()
 
 latest_readings = {
     "vin": None,
     "vout": None,
     "current": None,
+    "temperature": None,
     "updated_at": None,
     "connected": False,
 }
 
 
+class SensorReadings(BaseModel):
+    vin: float
+    vout: float
+    current: float
+    temperature: float | None = None
+
+
 @app.get("/")
 def home():
-    return {
-        "message": "LM2596S API is running",
-        "yolo_loaded": model is not None,
-    }
+    return {"message": "PCB Fault Detection API is running"}
 
 
 @app.post("/api/readings")
-def receive_readings(data: SensorReadings):
-    latest_readings.update({
-        "vin": data.vin,
-        "vout": data.vout,
-        "current": data.current,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "connected": True,
-    })
-
-    return {
-        "message": "Readings received successfully"
+def receive_readings(readings: SensorReadings):
+    values = {
+        "vin": readings.vin,
+        "vout": readings.vout,
+        "current": readings.current,
+        "temperature": readings.temperature,
     }
+
+    for name, value in values.items():
+        if value is not None and not math.isfinite(value):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid sensor value: {name}",
+            )
+
+    with data_lock:
+        latest_readings.update(values)
+        latest_readings["updated_at"] = (
+            datetime.now(timezone.utc).isoformat()
+        )
+        latest_readings["connected"] = True
+
+    return {"success": True}
 
 
 @app.get("/api/readings")
 def get_readings():
-    data = latest_readings.copy()
+    with data_lock:
+        result = latest_readings.copy()
 
-    if data["updated_at"] is None:
-        data["connected"] = False
-    else:
-        updated = datetime.fromisoformat(data["updated_at"])
+    updated_at = result["updated_at"]
 
+    if updated_at:
+        last_update = datetime.fromisoformat(updated_at)
         age = (
-            datetime.now(timezone.utc) - updated
+            datetime.now(timezone.utc) - last_update
         ).total_seconds()
 
-        data["connected"] = age <= 5
+        result["connected"] = age <= 6
+    else:
+        result["connected"] = False
 
-    return data
+    return result
 
 
-# --------------------------------------------------
-# YOLO PCB IMAGE DETECTION API
-# --------------------------------------------------
-
+# ---------------- YOLO IMAGE DETECTION ----------------
 @app.post("/api/process-image")
 async def process_image(file: UploadFile = File(...)):
-
     if model is None:
         raise HTTPException(
             status_code=503,
-            detail="YOLO model not found. Check the best.pt path."
+            detail=(
+                "YOLO model is unavailable. "
+                "Check backend/image_processing/weights/best.pt"
+            ),
         )
 
     allowed_types = {
@@ -130,102 +130,90 @@ async def process_image(file: UploadFile = File(...)):
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
-            detail="Upload a JPG, PNG, or WebP image."
+            detail="Upload a JPG, PNG, or WEBP image.",
         )
 
-    image_bytes = await file.read()
+    contents = await file.read()
 
-    if not image_bytes:
+    if not contents:
         raise HTTPException(
             status_code=400,
-            detail="The uploaded image is empty."
+            detail="The uploaded image is empty.",
         )
 
-    if len(image_bytes) > 10 * 1024 * 1024:
+    if len(contents) > 10 * 1024 * 1024:
         raise HTTPException(
             status_code=413,
-            detail="Image size must be less than 10 MB."
+            detail="Maximum image size is 10 MB.",
         )
 
-    image_array = np.frombuffer(
-        image_bytes,
-        dtype=np.uint8
-    )
-
-    image = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR
-    )
+    image_array = np.frombuffer(contents, dtype=np.uint8)
+    image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
     if image is None:
         raise HTTPException(
             status_code=400,
-            detail="Unable to read the uploaded image."
+            detail="Could not decode the uploaded image.",
         )
 
     try:
-        # Run YOLO
         results = model.predict(
             source=image,
             conf=0.15,
             verbose=False,
         )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"YOLO prediction failed: {exc}",
+        ) from exc
 
-        result = results[0]
+    result = results[0]
+    detections = []
 
-        detections = []
-
+    if result.boxes is not None:
         for box in result.boxes:
-
             class_id = int(box.cls[0].item())
-
-            confidence = float(
-                box.conf[0].item()
-            )
-
-            coordinates = [
-                round(float(value), 2)
+            confidence = float(box.conf[0].item())
+            x1, y1, x2, y2 = [
+                int(value)
                 for value in box.xyxy[0].tolist()
             ]
 
-            detections.append({
-                "class_id": class_id,
-                "class_name": model.names[class_id],
-                "confidence": round(confidence, 4),
-                "box": coordinates,
-            })
-
-        # Create the annotated image
-        annotated_image = result.plot()
-
-        success, encoded_image = cv2.imencode(
-            ".jpg",
-            annotated_image
-        )
-
-        if not success:
-            raise RuntimeError(
-                "Could not encode the processed image."
+            names = result.names
+            class_name = (
+                names.get(class_id, str(class_id))
+                if isinstance(names, dict)
+                else names[class_id]
             )
 
-        image_base64 = base64.b64encode(
-            encoded_image.tobytes()
-        ).decode("utf-8")
+            detections.append({
+                "class_id": class_id,
+                "class_name": class_name,
+                "confidence": round(confidence, 4),
+                "box": {
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                },
+            })
 
-        return {
-            "success": True,
-            "message": "YOLO detection completed.",
-            "filename": file.filename,
-            "detected": len(detections) > 0,
-            "detections": detections,
-            "image": (
-                "data:image/jpeg;base64,"
-                + image_base64
-            ),
-        }
+    annotated = result.plot()
+    success, encoded = cv2.imencode(".jpg", annotated)
 
-    except Exception as error:
+    if not success:
         raise HTTPException(
             status_code=500,
-            detail=f"YOLO detection failed: {str(error)}"
+            detail="Could not encode the annotated image.",
         )
+
+    image_base64 = base64.b64encode(
+        encoded.tobytes()
+    ).decode("utf-8")
+
+    return {
+        "success": True,
+        "detections": detections,
+        "image": f"data:image/jpeg;base64,{image_base64}",
+    }
